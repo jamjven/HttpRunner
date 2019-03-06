@@ -1,5 +1,31 @@
 # Release History
 
+## 2.0.5 (2019-03-04)
+
+**Features**
+
+- implement method to get variables and output
+
+**Bugfixes**
+
+- fix xss in response json
+
+## 2.0.4 (2019-02-28)
+
+**Bugfixes**
+
+- fix verify priority with nested testcase
+- fix function in config variables called multiple times
+- dump loaded tests when running tests_mapping directly
+
+## 2.0.3 (2019-02-24)
+
+**Bugfixes**
+
+- fix verify priority: teststep > config
+- fix Chinese charactor in log_file encoding error in Windows
+- fix dump file with Chinese charactor in Python 3
+
 ## 2.0.2 (2019-01-21)
 
 **Bugfixes**

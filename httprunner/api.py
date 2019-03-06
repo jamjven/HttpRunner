@@ -157,6 +157,9 @@ class HttpRunner(object):
     def run_tests(self, tests_mapping):
         """ run testcase/testsuite data
         """
+        if self.save_tests:
+            utils.dump_tests(tests_mapping, "loaded")
+
         # parse tests
         self.exception_stage = "parse tests"
         parsed_tests_mapping = parser.parse_tests(tests_mapping)
@@ -191,6 +194,35 @@ class HttpRunner(object):
 
         return report_path
 
+    def get_vars_out(self):
+        """ get variables and output
+        Returns:
+            list: list of variables and output.
+                if tests are parameterized, list items are corresponded to parameters.
+
+                [
+                    {
+                        "in": {
+                            "user1": "leo"
+                        },
+                        "out": {
+                            "out1": "out_value_1"
+                        }
+                    },
+                    {...}
+                ]
+
+            None: returns None if tests not started or finished or corrupted.
+
+        """
+        if not self._summary:
+            return None
+
+        return [
+            summary["in_out"]
+            for summary in self._summary["details"]
+        ]
+
     def run_path(self, path, dot_env_path=None, mapping=None):
         """ run testcase/testsuite file or folder.
 
@@ -210,9 +242,6 @@ class HttpRunner(object):
 
         if mapping:
             tests_mapping["project_mapping"]["variables"] = mapping
-
-        if self.save_tests:
-            utils.dump_tests(tests_mapping, "loaded")
 
         return self.run_tests(tests_mapping)
 

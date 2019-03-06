@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import time
 import unittest
@@ -82,6 +83,68 @@ class TestHttpRunner(ApiServerUnittest):
         self.runner.run(self.testcase_cli_path)
         self.assertEqual(self.runner.summary["stat"]["teststeps"]["skipped"], 4)
 
+    def test_save_variables_output(self):
+        testcases = [
+            {
+                "config": {
+                    'name': "post data",
+                    'variables': {
+                        "var1": "abc",
+                        "var2": "def"
+                    },
+                    "output": ["status_code", "req_data"]
+                },
+                "teststeps": [
+                    {
+                        "name": "post data",
+                        "request": {
+                            "url": "{}/post".format(HTTPBIN_SERVER),
+                            "method": "POST",
+                            "headers": {
+                                "User-Agent": "python-requests/2.18.4",
+                                "Content-Type": "application/json"
+                            },
+                            "data": "$var1"
+                        },
+                        "extract": {
+                            "status_code": "status_code",
+                            "req_data": "content.data"
+                        },
+                        "validate": [
+                            {"eq": ["status_code", 200]}
+                        ]
+                    }
+                ]
+            }
+        ]
+        tests_mapping = {
+            "testcases": testcases
+        }
+        self.runner.run_tests(tests_mapping)
+        vars_out = self.runner.get_vars_out()
+        self.assertIsInstance(vars_out, list)
+        self.assertEqual(vars_out[0]["in"]["var1"], "abc")
+        self.assertEqual(vars_out[0]["in"]["var2"], "def")
+        self.assertEqual(vars_out[0]["out"]["status_code"], 200)
+        self.assertEqual(vars_out[0]["out"]["req_data"], "abc")
+
+    def test_save_variables_output_with_parameters(self):
+        testcase_file_path = os.path.join(
+            os.getcwd(), 'tests/testsuites/create_users_with_parameters.yml')
+        self.runner.run(testcase_file_path)
+        vars_out = self.runner.get_vars_out()
+        self.assertIsInstance(vars_out, list)
+        self.assertEqual(len(vars_out), 6)
+        self.assertEqual(vars_out[0]["in"]["uid"], 101)
+        self.assertEqual(vars_out[0]["in"]["device_sn"], "TESTSUITE_X1")
+        token1 = vars_out[0]["out"]["token"]
+        self.assertEqual(len(token1), 16)
+        self.assertEqual(vars_out[5]["in"]["uid"], 103)
+        self.assertEqual(vars_out[5]["in"]["device_sn"], "TESTSUITE_X2")
+        token2 = vars_out[0]["out"]["token"]
+        self.assertEqual(len(token2), 16)
+        self.assertEqual(token1, token2)
+
     def test_html_report(self):
         report_save_dir = os.path.join(os.getcwd(), 'reports', "demo")
         runner = HttpRunner(failfast=True, report_dir=report_save_dir)
@@ -123,10 +186,6 @@ class TestHttpRunner(ApiServerUnittest):
             {
                 "config": {
                     'name': "post data",
-                    'request': {
-                        'base_url': '',
-                        'headers': {'User-Agent': 'python-requests/2.18.4'}
-                    },
                     'variables': []
                 },
                 "teststeps": [
@@ -136,6 +195,7 @@ class TestHttpRunner(ApiServerUnittest):
                             "url": "{}/post".format(HTTPBIN_SERVER),
                             "method": "POST",
                             "headers": {
+                                "User-Agent": "python-requests/2.18.4",
                                 "Content-Type": "application/json"
                             },
                             "data": "abc"
@@ -446,6 +506,45 @@ class TestHttpRunner(ApiServerUnittest):
     #     self.runner.run(testcase_file_path)
     #     self.assertTrue(self.runner.summary["success"])
 
+    def test_html_report_xss(self):
+        testcases = [
+            {
+                "config": {
+                    'name': "post data"
+                },
+                "teststeps": [
+                    {
+                        "name": "post data",
+                        "request": {
+                            "url": "{}/anything".format(HTTPBIN_SERVER),
+                            "method": "POST",
+                            "headers": {
+                                "Content-Type": "application/json"
+                            },
+                            "json": {
+                                'success': False,
+                                "person": "<img src=x onerror=alert(1)>"
+                            }
+                        },
+                        "validate": [
+                            {"eq": ["status_code", 200]}
+                        ]
+                    }
+                ]
+            }
+        ]
+        tests_mapping = {
+            "testcases": testcases
+        }
+        report_path = self.runner.run(tests_mapping)
+        with open(report_path) as f:
+            content = f.read()
+            m = re.findall(
+                re.escape("&#34;person&#34;: &#34;&lt;img src=x onerror=alert(1)&gt;&#34;"),
+                content
+            )
+            self.assertEqual(len(m), 2)
+
 
 class TestApi(ApiServerUnittest):
 
@@ -483,7 +582,7 @@ class TestApi(ApiServerUnittest):
 
         self.assertEqual(len(parsed_testcases), 1)
 
-        self.assertNotIn("variables", parsed_testcases[0]["config"])
+        self.assertIn("variables", parsed_testcases[0]["config"])
         self.assertEqual(len(parsed_testcases[0]["teststeps"]), 2)
 
         test_dict1 = parsed_testcases[0]["teststeps"][0]
@@ -491,6 +590,10 @@ class TestApi(ApiServerUnittest):
         self.assertNotIn("api_def", test_dict1)
         self.assertEqual(test_dict1["variables"]["device_sn"], "TESTCASE_SETUP_XXX")
         self.assertEqual(test_dict1["request"]["url"], "http://127.0.0.1:5000/api/get-token")
+        self.assertEqual(test_dict1["request"]["verify"], False)
+
+        test_dict2 = parsed_testcases[0]["teststeps"][1]
+        self.assertEqual(test_dict2["request"]["verify"], False)
 
     def test_testcase_add_tests(self):
         testcase_path = "tests/testcases/setup.yml"
@@ -505,6 +608,22 @@ class TestApi(ApiServerUnittest):
         self.assertEqual(teststeps[0]["name"], "get token (setup)")
         self.assertEqual(teststeps[0]["variables"]["device_sn"], "TESTCASE_SETUP_XXX")
         self.assertIn("api", teststeps[0])
+
+    def test_testcase_complex_verify(self):
+        testcase_path = "tests/testcases/create_and_check.yml"
+        tests_mapping = loader.load_tests(testcase_path)
+        parsed_tests_mapping = parser.parse_tests(tests_mapping)
+        teststeps = parsed_tests_mapping["testcases"][0]["teststeps"]
+
+        # testcases/setup.yml
+        teststep1 = teststeps[0]
+        self.assertEqual(teststep1["teststeps"][0]["request"]["verify"], False)
+        self.assertEqual(teststep1["teststeps"][1]["request"]["verify"], False)
+
+        # testcases/create_and_check.yml teststep 2/3/4
+        self.assertEqual(teststeps[1]["request"]["verify"], True)
+        self.assertEqual(teststeps[2]["request"]["verify"], True)
+        self.assertEqual(teststeps[3]["request"]["verify"], True)
 
     def test_testcase_simple_run_suite(self):
         testcase_path = "tests/testcases/setup.yml"
@@ -578,6 +697,9 @@ class TestApi(ApiServerUnittest):
 
         testcase1 = parsed_testcases[0]["teststeps"][0]
         self.assertIn("setup and reset all (override)", testcase1["config"]["name"])
+        self.assertEqual(testcase1["teststeps"][0]["variables"]["var_c"], testcase1["teststeps"][0]["variables"]["var_d"])
+        self.assertEqual(testcase1["teststeps"][0]["variables"]["var_a"], testcase1["teststeps"][0]["variables"]["var_b"])
+        self.assertNotEqual(testcase1["teststeps"][0]["variables"]["var_a"], testcase1["teststeps"][0]["variables"]["var_c"])
         self.assertNotIn("testcase_def", testcase1)
         self.assertEqual(len(testcase1["teststeps"]), 2)
         self.assertEqual(

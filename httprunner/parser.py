@@ -506,7 +506,7 @@ def parse_string_variables(content, variables_mapping, functions_mapping):
                 functions_mapping,
                 raise_if_variable_not_found=False
             )
-
+            variables_mapping[variable_name] = parsed_variable_value
         # TODO: replace variable label from $var to {{var}}
         if "${}".format(variable_name) == content:
             # content is a variable
@@ -731,9 +731,6 @@ def _extend_with_testcase(test_dict, testcase_def_dict):
     if not testcase_def_dict["config"].get("base_url"):
         testcase_def_dict["config"]["base_url"] = test_base_url
 
-    test_verify = test_dict.pop("verify", True)
-    testcase_def_dict["config"].setdefault("verify", test_verify)
-
     # override name
     test_name = test_dict.pop("name") or testcase_def_dict["config"].pop("name") or "Undefined name"
 
@@ -759,13 +756,15 @@ def __parse_config(config, project_mapping):
 
     # parse config variables
     parsed_config_variables = {}
-    for key, value in raw_config_variables_mapping.items():
+
+    for key in raw_config_variables_mapping:
         parsed_value = parse_data(
-            value,
+            raw_config_variables_mapping[key],
             raw_config_variables_mapping,
             functions,
             raise_if_variable_not_found=False
         )
+        raw_config_variables_mapping[key] = parsed_value
         parsed_config_variables[key] = parsed_value
 
     if parsed_config_variables:
@@ -794,8 +793,11 @@ def __parse_testcase_tests(tests, config, project_mapping):
         variables priority:
         testcase config > testcase test > testcase_def config > testcase_def test > api
 
-        base_url/verify priority:
+        base_url priority:
         testcase test > testcase config > testsuite test > testsuite config > api
+
+        verify priority:
+        testcase teststep (api) > testcase config > testsuite config
 
     Args:
         tests (list):
@@ -803,7 +805,7 @@ def __parse_testcase_tests(tests, config, project_mapping):
         project_mapping (dict):
 
     """
-    config_variables = config.pop("variables", {})
+    config_variables = config.get("variables", {})
     config_base_url = config.pop("base_url", "")
     config_verify = config.pop("verify", True)
     functions = project_mapping.get("functions", {})
@@ -814,20 +816,28 @@ def __parse_testcase_tests(tests, config, project_mapping):
         if (not test_dict.get("base_url")) and config_base_url:
             test_dict["base_url"] = config_base_url
 
-        test_dict.setdefault("verify", config_verify)
-
         # 1, testcase config => testcase tests
         # override test_dict variables
         test_dict["variables"] = utils.extend_variables(
             test_dict.pop("variables", {}),
             config_variables
         )
-        test_dict["variables"] = parse_data(
-            test_dict["variables"],
-            test_dict["variables"],
-            functions,
-            raise_if_variable_not_found=False
-        )
+
+        for key in test_dict["variables"]:
+            parsed_key = parse_data(
+                key,
+                test_dict["variables"],
+                functions,
+                raise_if_variable_not_found=False
+            )
+            parsed_value = parse_data(
+                test_dict["variables"][key],
+                test_dict["variables"],
+                functions,
+                raise_if_variable_not_found=False
+            )
+            if parsed_key in test_dict["variables"]:
+                test_dict["variables"][parsed_key] = parsed_value
 
         # parse test_dict name
         test_dict["name"] = parse_data(
@@ -843,6 +853,9 @@ def __parse_testcase_tests(tests, config, project_mapping):
             # 2, testcase test_dict => testcase_def config
             testcase_def = test_dict.pop("testcase_def")
             _extend_with_testcase(test_dict, testcase_def)
+
+            # verify priority: nested testcase config > testcase config
+            test_dict["config"].setdefault("verify", config_verify)
 
             # 3, testcase_def config => testcase_def test_dict
             _parse_testcase(test_dict, project_mapping)
@@ -874,6 +887,10 @@ def __parse_testcase_tests(tests, config, project_mapping):
                     base_url,
                     request_url
                 )
+
+        # verify priority: testcase teststep > testcase config
+        if "request" in test_dict and "verify" not in test_dict["request"]:
+            test_dict["request"]["verify"] = config_verify
 
 
 def _parse_testcase(testcase, project_mapping):
@@ -969,15 +986,17 @@ def __get_parsed_testsuite_testcases(testcases, testsuite_config, project_mappin
 
         # parse config variables
         parsed_config_variables = {}
-        for key, value in parsed_testcase_config_variables.items():
+
+        for key in parsed_testcase_config_variables:
             try:
                 parsed_value = parse_data(
-                    value,
+                    parsed_testcase_config_variables[key],
                     parsed_testcase_config_variables,
                     functions
                 )
             except exceptions.VariableNotFound:
                 pass
+            parsed_testcase_config_variables[key] = parsed_value
             parsed_config_variables[key] = parsed_value
 
         if parsed_config_variables:
